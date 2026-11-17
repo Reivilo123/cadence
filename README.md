@@ -37,7 +37,6 @@ sdk.dir=C\:\\Users\\<toi>\\AppData\\Local\\Android\\Sdk
 
 ## Crédits
 
-- Style inspiré de [unslop](https://github.com/heydamir/unslop) par Damir Sokolovsky (CC BY 4.0).
 - Données nutritionnelles : [Open Food Facts](https://world.openfoodfacts.org) (ODbL).
 - Icônes : tracés [Lucide](https://lucide.dev) (ISC).
 
