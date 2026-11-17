@@ -362,6 +362,16 @@ fieldset:disabled{opacity:.55}
       <div class="opt"><div>Tester la voix<small id="voiceStatus">Vérifie que ton appareil lit la voix.</small></div>
         <button type="button" class="small" id="testVoice">Tester</button></div>
     </section>
+    <section class="card">
+      <h2 class="sec">Mes données</h2>
+      <p class="hint">Tes séances, pesées, repas et réglages restent sur ce téléphone. Fais une sauvegarde de temps en temps et garde-la dans Drive ou par courriel : tu pourras tout récupérer si tu réinstalles l’app ou changes de téléphone.</p>
+      <div class="row-btns">
+        <button type="button" class="primary" id="bkSave">Sauvegarder</button>
+        <button type="button" id="bkLoad">Restaurer</button>
+      </div>
+      <input type="file" id="bkFile" hidden>
+      <p class="hint" id="bkStatus" aria-live="polite" style="margin-top:8px"></p>
+    </section>
   </section>
 
   <!-- SÉANCES -->
@@ -1704,6 +1714,60 @@ window.addEventListener('hashchange', () => { if (!P && $('editor').hidden) { ro
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && P) wake(); });
 
 $('clearEx').addEventListener('click', clearExamples);
+
+/* ================= sauvegarde / restauration ================= */
+const BK_PREFIX = 'cadence-';
+function bkCollect(){
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); if (k && k.startsWith(BK_PREFIX)) data[k] = localStorage.getItem(k); }
+  return {app:'cadence', version:1, date:new Date().toISOString(), data};
+}
+async function bkSave(){
+  const st = $('bkStatus');
+  try {
+    saveAll();
+    const json = JSON.stringify(bkCollect(), null, 1), name = 'cadence-sauvegarde-' + ymd(new Date()) + '.json';
+    const FS = plug('Filesystem'), SH = plug('Share');
+    if (FS && SH){
+      const w = await FS.writeFile({path:name, data:json, directory:'CACHE', encoding:'utf8'});
+      await SH.share({title:'Sauvegarde Cadence', text:'Sauvegarde de mes données Cadence', url:w.uri, dialogTitle:'Enregistrer la sauvegarde'});
+    } else {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], {type:'application/json'})); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    st.textContent = 'Sauvegarde créée : ' + name + '. Garde-la dans Drive, tes fichiers ou un courriel.';
+  } catch(e){
+    if (/cancel/i.test(String(e && e.message))) { st.textContent = 'Sauvegarde annulée.'; return; }
+    st.textContent = 'La sauvegarde a échoué : ' + (e && e.message ? e.message : e);
+  }
+}
+let bkPending = null;
+function bkRead(file){
+  const st = $('bkStatus'), r = new FileReader();
+  r.onload = () => {
+    let b = null; try { b = JSON.parse(r.result); } catch(e){}
+    if (!b || b.app !== 'cadence' || !b.data || typeof b.data !== 'object'){ st.textContent = 'Ce fichier n’est pas une sauvegarde Cadence.'; return; }
+    const keys = Object.keys(b.data).filter(k => k.startsWith(BK_PREFIX) && typeof b.data[k] === 'string');
+    if (!keys.length){ st.textContent = 'Cette sauvegarde est vide.'; return; }
+    bkPending = b;
+    const when = b.date ? new Date(b.date).toLocaleDateString('fr-CA', {day:'numeric', month:'long', year:'numeric'}) : 'date inconnue';
+    st.innerHTML = `Sauvegarde du <strong>${esc(when)}</strong> prête. Elle <strong>remplacera toutes les données actuelles</strong>. <button type="button" class="small go" id="bkConfirm">Remplacer mes données</button>`;
+    $('bkConfirm').addEventListener('click', bkApply);
+  };
+  r.onerror = () => { st.textContent = 'Impossible de lire ce fichier.'; };
+  r.readAsText(file);
+}
+function bkApply(){
+  if (!bkPending) return;
+  const old = [];
+  for (let i = 0; i < localStorage.length; i++){ const k = localStorage.key(i); if (k && k.startsWith(BK_PREFIX)) old.push(k); }
+  old.forEach(k => localStorage.removeItem(k));
+  Object.keys(bkPending.data).forEach(k => { if (k.startsWith(BK_PREFIX) && typeof bkPending.data[k] === 'string') localStorage.setItem(k, bkPending.data[k]); });
+  location.hash = '#accueil'; location.reload();
+}
+$('bkSave').addEventListener('click', bkSave);
+$('bkLoad').addEventListener('click', () => { $('bkFile').value = ''; $('bkFile').click(); });
+$('bkFile').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) bkRead(f); });
 $('newProg').addEventListener('click', () => openEditor(null, false));
 $('exSel').addEventListener('change', renderExercise);
 $('spSel').addEventListener('change', renderSportStats);
