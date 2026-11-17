@@ -1,0 +1,21 @@
+# Dépendances et fichiers générés
+node_modules/
+cadence-app/www/
+cadence-app/android/app/src/main/assets/public/
+cadence-app/android/app/src/main/assets/capacitor.config.json
+cadence-app/android/app/src/main/assets/capacitor.plugins.json
+
+# Compilation Android
+.gradle/
+build/
+cadence-app/android/local.properties
+cadence-app/android/.idea/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Divers
+.claude/
+.DS_Store
+Thumbs.db

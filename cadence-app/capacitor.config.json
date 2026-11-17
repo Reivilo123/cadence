@@ -1,0 +1,13 @@
+{
+  "appId": "app.cadence.entrainement",
+  "appName": "Cadence",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#ECEEE9"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
