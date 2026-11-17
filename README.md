@@ -40,3 +40,16 @@ sdk.dir=C\:\\Users\\<toi>\\AppData\\Local\\Android\\Sdk
 - Style inspiré de [unslop](https://github.com/heydamir/unslop) par Damir Sokolovsky (CC BY 4.0).
 - Données nutritionnelles : [Open Food Facts](https://world.openfoodfacts.org) (ODbL).
 - Icônes : tracés [Lucide](https://lucide.dev) (ISC).
+
+## Publier une version (Release GitHub)
+
+Le workflow `.github/workflows/release.yml` construit un APK **signé** et le publie dans une Release à chaque tag `v*` :
+
+```powershell
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+L'APK apparaît ensuite dans l'onglet **Releases** du dépôt, prêt à installer.
+
+La clé de signature n'est **jamais** dans git. Elle est fournie par quatre secrets du dépôt (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`). Garde une copie de la clé en lieu sûr : sans elle, plus aucune mise à jour ne pourra s'installer par-dessus les versions publiées.

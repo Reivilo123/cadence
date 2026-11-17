@@ -7,8 +7,9 @@ android {
         applicationId "app.cadence.entrainement"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Surchargés par le workflow de release : -PversionCode=… -PversionName=…
+        versionCode((project.findProperty('versionCode') ?: '1') as Integer)
+        versionName((project.findProperty('versionName') ?: '1.0') as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,21 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Clé de signature des releases : jamais dans git, fournie par variables d'environnement
+    // (secrets GitHub dans le workflow, ou à la main pour un build local).
+    signingConfigs {
+        release {
+            if (System.getenv('CADENCE_KEYSTORE')) {
+                storeFile file(System.getenv('CADENCE_KEYSTORE'))
+                storePassword System.getenv('CADENCE_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('CADENCE_KEY_ALIAS')
+                keyPassword System.getenv('CADENCE_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (System.getenv('CADENCE_KEYSTORE')) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
