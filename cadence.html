@@ -118,6 +118,11 @@ button:disabled{opacity:.45;cursor:default}
 .tally{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .tally span{font-size:.78rem;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--surface2);color:var(--muted)}
 .tally span.ok{background:var(--rest-soft);color:var(--rest)}
+.tnote{margin-top:6px;font-size:.8rem}
+.goalset{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
+.goalset[hidden]{display:none}
+.goalset label{display:flex;flex-direction:column;gap:4px;font-size:.82rem;font-weight:600;color:var(--muted)}
+.goalset input{text-align:center;width:100%}
 .excard .reco{font-size:.84rem;border-radius:8px;padding:6px 10px;background:var(--work-soft);display:flex;flex-direction:column;gap:2px}
 .excard .reco b{font-family:var(--f-display);font-size:1.05rem;font-weight:700}
 .excard .reco span{color:var(--muted)}
@@ -349,6 +354,16 @@ fieldset:disabled{opacity:.55}
           <label><input type="radio" name="unit" id="uLb" value="lb"><span>lb</span></label>
           <label><input type="radio" name="unit" id="uKg" value="kg"><span>kg</span></label>
         </div></div>
+      <div class="opt"><div>Cibles de la semaine<small id="goalHint">Auto : selon ton rythme et ton objectif de poids</small></div>
+        <div class="seg" role="radiogroup" aria-label="Cibles de la semaine">
+          <label><input type="radio" name="gmode" id="gAuto" value="auto"><span>Auto</span></label>
+          <label><input type="radio" name="gmode" id="gPerso" value="perso"><span>Perso</span></label>
+        </div></div>
+      <div class="goalset" id="goalSet" hidden>
+        <label>Force<input type="number" id="gForce" min="0" max="7" inputmode="numeric"></label>
+        <label>Cardio<input type="number" id="gCardio" min="0" max="7" inputmode="numeric"></label>
+        <label>Mobilité<input type="number" id="gMob" min="0" max="7" inputmode="numeric"></label>
+      </div>
       <label class="opt" for="optVoice"><div>Guidage vocal<small>Annonce les exercices, les repos et le décompte</small></div>
         <span class="sw"><input type="checkbox" id="optVoice"><span></span></span></label>
       <div class="opt" id="voiceRow"><div>Voix<small>La plus naturelle de ton appareil est choisie d’office</small></div>
@@ -877,14 +892,25 @@ const sayW = w => num(w, 2).replace(',', ' virgule ') + (U() === 'lb' ? ' livres
 const CAT = {muscu:'force', pdc:'force', circuit:'cardio', sport:'cardio', mob:'mob'};
 const CAT_L = {force:'Force', cardio:'Cardio', mob:'Mobilité'};
 function weeklyGoals(){
-  // objectifs = ton rythme habituel des 4 dernières semaines (ou 2 force, 2 cardio, 1 mobilité au départ)
+  const c = calc(), mode = c ? c.mode : 'maintien', cg = S.settings.goals;
+  // cibles choisies dans les Réglages : on les respecte telles quelles
+  if (cg) return {force:cg.force, cardio:cg.cardio, mob:cg.mob, mode, note:'Tes cibles perso (Réglages).'};
+  // sinon : ton rythme habituel des 4 dernières semaines (ou 2 force, 2 cardio, 1 mobilité au départ)
   const mon = monday(new Date()), start = ymd(new Date(mon.getTime() - 28 * DAY)), end = ymd(mon);
   const past = S.sessions.filter(s => s.date >= start && s.date < end);
-  if (past.length < 3) return {force:2, cardio:2, mob:1};
-  const first = past.reduce((m, s) => s.date < m ? s.date : m, end);
-  const weeks = Math.min(4, Math.max(1, Math.round((mon - pd(first)) / (7 * DAY))));
-  const g = {force:0, cardio:0, mob:0}; past.forEach(s => { const c = CAT[s.type]; if (c) g[c]++; });
-  return {force:Math.min(5, Math.max(1, Math.round(g.force / weeks))), cardio:Math.min(6, Math.round(g.cardio / weeks)), mob:Math.max(1, Math.round(g.mob / weeks))};
+  let g = {force:2, cardio:2, mob:1}, note = 'Cibles de départ';
+  if (past.length >= 3){
+    const first = past.reduce((m, s) => s.date < m ? s.date : m, end);
+    const weeks = Math.min(4, Math.max(1, Math.round((mon - pd(first)) / (7 * DAY))));
+    const n = {force:0, cardio:0, mob:0}; past.forEach(s => { const k = CAT[s.type]; if (k) n[k]++; });
+    g = {force:Math.min(5, Math.max(1, Math.round(n.force / weeks))), cardio:Math.min(6, Math.round(n.cardio / weeks)), mob:Math.max(1, Math.round(n.mob / weeks))};
+    note = 'Selon ton rythme des 4 dernières semaines';
+  }
+  // ajusté à ton objectif de poids (section Corps), sans faire grimper les cibles semaine après semaine
+  if (mode === 'perte' && (g.cardio < 3 || g.force < 2)){ g.cardio = Math.max(g.cardio, 3); g.force = Math.max(g.force, 2); note += ', ajusté pour perdre du poids : au moins 3 cardio et 2 force pour garder ton muscle'; }
+  else if (mode === 'prise' && g.force < 3){ g.force = 3; note += ', ajusté pour prendre du muscle : au moins 3 séances de force'; }
+  else if (mode !== 'maintien') note += mode === 'perte' ? ', déjà adapté à ton objectif de perte de poids' : ', déjà adapté à ton objectif de prise de muscle';
+  return Object.assign(g, {mode, note:note + '.'});
 }
 function favProg(types, fallback, rotate){
   const since = ymd(new Date(Date.now() - 28 * DAY)), last = {}, count = {};
@@ -899,7 +925,7 @@ function suggestNext(){
   const now = new Date(), today = ymd(now), yest = ymd(new Date(now.getTime() - DAY)), before = ymd(new Date(now.getTime() - 2 * DAY));
   const goals = weeklyGoals(), done = {force:0, cardio:0, mob:0};
   sessionsThisWeek().forEach(s => { const c = CAT[s.type]; if (c) done[c]++; });
-  const tally = ['force', 'cardio', 'mob'].map(c => ({c, l:CAT_L[c], d:done[c], g:goals[c]}));
+  const tally = ['force', 'cardio', 'mob'].map(c => ({c, l:CAT_L[c], d:done[c], g:goals[c]})); tally.note = goals.note;
   const daysLeft = 7 - (now.getDay() + 6) % 7, on = d => S.sessions.filter(s => s.date === d && s.type !== 'mob');
   const mob = (why) => ({p:favProg(['mob'], 'b-mob'), why, tally});
   if (on(today).length) return mob('Tu t’es déjà entraîné aujourd’hui. Une mobilité légère aide à récupérer, sinon repos.');
@@ -912,7 +938,9 @@ function suggestNext(){
   const need = c => (goals[c] - done[c]) / daysLeft;
   const forceOk = goals.force > done.force && !forceYest, cardioOk = goals.cardio > done.cardio;
   let cat = null;
-  if (forceOk && (!cardioOk || need('force') >= need('cardio'))) cat = 'force'; else if (cardioOk) cat = 'cardio';
+  // à besoin égal : cardio d'abord si tu veux perdre du poids, force sinon
+  const forceFirst = goals.mode === 'perte' ? need('force') > need('cardio') : need('force') >= need('cardio');
+  if (forceOk && (!cardioOk || forceFirst)) cat = 'force'; else if (cardioOk) cat = 'cardio';
   if (!cat){
     if (goals.force > done.force && forceYest) return mob('Tes muscles ont travaillé hier : laisse-les récupérer 48 h. Mobilité aujourd’hui, force demain.');
     return mob(goals.mob > done.mob ? 'Force et cardio faits cette semaine. Il te manque ta séance de mobilité.' : 'Objectifs de la semaine atteints. Mobilité ou repos bien mérité.');
@@ -942,6 +970,7 @@ function renderSuggest(){
   const t = document.createElement('div'); t.className = 'tally';
   t.innerHTML = g.tally.map(x => `<span class="${x.d >= x.g ? 'ok' : ''}">${x.l} ${x.d}/${x.g}</span>`).join('');
   box.appendChild(t);
+  if (g.tally.note){ const n = document.createElement('p'); n.className = 'hint tnote'; n.textContent = g.tally.note; box.appendChild(n); }
 }
 
 /* ================= ACCUEIL ================= */
@@ -1903,6 +1932,20 @@ $('dPrev').addEventListener('click', () => shiftDay(-1));
 $('dNext').addEventListener('click', () => shiftDay(1));
 $('uLb').checked = U() === 'lb'; $('uKg').checked = U() === 'kg';
 document.querySelectorAll('input[name="unit"]').forEach(r => r.addEventListener('change', () => { S.settings.unit = r.value; saveAll(); renderAll(); }));
+/* cibles de la semaine : Auto (rythme + objectif de poids) ou Perso */
+function syncGoalsUI(){
+  const cg = S.settings.goals, v = cg || weeklyGoals();
+  $('gAuto').checked = !cg; $('gPerso').checked = !!cg; $('goalSet').hidden = !cg;
+  $('gForce').value = v.force; $('gCardio').value = v.cardio; $('gMob').value = v.mob;
+  $('goalHint').textContent = cg ? 'Perso : tes propres cibles, par semaine' : 'Auto : selon ton rythme et ton objectif de poids';
+}
+const readGoal = id => Math.min(7, Math.max(0, parseInt($(id).value, 10) || 0));
+function saveGoals(){ S.settings.goals = {force:readGoal('gForce'), cardio:readGoal('gCardio'), mob:readGoal('gMob')}; saveAll(); syncGoalsUI(); renderHome(); }
+document.querySelectorAll('input[name="gmode"]').forEach(r => r.addEventListener('change', () => {
+  if (r.value === 'perso'){ syncGoalsUI(); saveGoals(); } else { S.settings.goals = null; saveAll(); syncGoalsUI(); renderHome(); }
+}));
+['gForce', 'gCardio', 'gMob'].forEach(id => $(id).addEventListener('change', saveGoals));
+syncGoalsUI();
 $('optVoice').checked = S.settings.voice;
 $('optVoice').addEventListener('change', e => { S.settings.voice = e.target.checked; saveAll(); if (!e.target.checked) hush(); });
 $('voiceSel').addEventListener('change', e => { S.settings.voiceName = e.target.value; saveAll(); pickVoice(); say('Voici cette voix. Prêt pour l’entraînement ?'); });
