@@ -112,6 +112,15 @@ button:disabled{opacity:.45;cursor:default}
 .qbtn strong{display:block;font-family:var(--f-display);font-size:1.25rem;font-weight:700}
 .qbtn small{display:block;color:var(--muted);font-weight:500;font-size:.82rem}
 .qbtn .arrow{font-family:var(--f-display);font-size:1.6rem;color:var(--work)}
+.qbtn.sugg{border:2px solid var(--work);background:var(--work-soft)}
+.qbtn .ups{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;color:var(--ink)}
+.ups .up,.reco.up b{color:var(--work)} .ups .down,.reco.down b{color:var(--rest)}
+.tally{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.tally span{font-size:.78rem;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--surface2);color:var(--muted)}
+.tally span.ok{background:var(--rest-soft);color:var(--rest)}
+.excard .reco{font-size:.84rem;border-radius:8px;padding:6px 10px;background:var(--work-soft);display:flex;flex-direction:column;gap:2px}
+.excard .reco b{font-family:var(--f-display);font-size:1.05rem;font-weight:700}
+.excard .reco span{color:var(--muted)}
 
 /* graphiques */
 .chart{width:100%;height:auto;display:block}
@@ -330,6 +339,7 @@ fieldset:disabled{opacity:.55}
       <a class="tile" href="#corps"><b id="hWeight">—</b><span id="hWeightLbl">poids actuel</span></a>
     </div>
     <section class="card"><h2 class="sec">Cette semaine</h2><div class="week" id="weekStrip"></div></section>
+    <section><h2 class="sec">Suggestion du jour</h2><div id="nextSug"></div></section>
     <section><h2 class="sec">Démarrage rapide</h2><div class="quick" id="quick"></div></section>
     <section><h2 class="sec">Dernière séance</h2><div class="card" id="lastSess"></div></section>
     <section class="card">
@@ -813,6 +823,127 @@ function setsText(it){
 }
 const sortSessions = () => S.sessions.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.id < b.id ? -1 : 1));
 
+/* ================= SURCHARGE PROGRESSIVE ================= */
+// Double progression : on vise le nombre de répétitions du programme à toutes les séries,
+// puis on ajoute de la charge (ou des répétitions / secondes sans charge).
+const isSmallLift = n => /halt[eè]re|curl|extension|élévation|poulie|oiseau|mollet/i.test(n);
+const isLowerLift = n => /squat|soulev|deadlift|fente|presse|hip|jambe|leg/i.test(n);
+const wStep = () => U() === 'lb' ? 2.5 : 1.25;
+const roundW = v => Math.round(v / wStep()) * wStep();
+const wInc = n => { const lb = U() === 'lb'; return isSmallLift(n) ? (lb ? 5 : 2) : isLowerLift(n) ? (lb ? 10 : 5) : (lb ? 5 : 2.5); };
+function historyFor(name, max){
+  const out = [];
+  for (let i = S.sessions.length - 1; i >= 0 && out.length < max; i--){
+    const s = S.sessions[i], it = (s.items || []).find(x => x.n === name); if (it) out.push({date:s.date, feel:s.feel, it});
+  }
+  return out;
+}
+function recommend(e, type){
+  const nSets = e.sets || 3, T = e.reps, isTime = e.unit === 's', H = historyFor(e.n, 3), L = H[0];
+  if (!L || !T) return null;
+  const ls = L.it.sets.filter(s => s.r > 0); if (!ls.length) return null;
+  const hard = L.feel === 'difficile', easy = L.feel === 'facile';
+  const maxW = Math.max(0, ...ls.map(s => s.w || 0));
+  if (type === 'muscu' && maxW > 0 && !isTime){
+    const top = s => (s.w || 0) >= maxW - .01;
+    const complete = it => { const sw = it.sets.filter(s => s.r > 0), m = Math.max(0, ...sw.map(s => s.w || 0)), t = sw.filter(s => (s.w || 0) >= m - .01); return t.length >= nSets && t.every(s => s.r >= T); };
+    const lastU = roundW(toU(maxW)), u = U(), reps = ls.filter(top).map(s => s.r).join(', ');
+    if (complete(L.it)){
+      if (hard) return {w:lastU, r:T, kind:'same', txt:num(lastU, 2) + ' ' + u + ' × ' + T, why:'Réussi, mais c’était dur : on consolide à cette charge.'};
+      const w = roundW(lastU + wInc(e.n));
+      return {w, r:T, kind:'up', txt:num(w, 2) + ' ' + u + ' × ' + T, why:'Toutes tes séries réussies à ' + num(lastU, 2) + ' ' + u + ' : +' + num(w - lastU, 2) + ' ' + u + '.'};
+    }
+    // deux échecs de suite à la même charge : on allège de 10 %
+    const fails = H.filter(h => !complete(h.it) && Math.abs(Math.max(0, ...h.it.sets.map(s => s.w || 0)) - maxW) < .01).length;
+    if (fails >= 2 && H.length >= 2 && !complete(H[1].it)){
+      const w = roundW(lastU * .9);
+      return {w, r:T, kind:'down', txt:num(w, 2) + ' ' + u + ' × ' + T, why:'Deux séances de suite sans compléter à ' + num(lastU, 2) + ' ' + u + ' : on allège de 10 % pour repartir plus fort.'};
+    }
+    return {w:lastU, r:T, kind:'same', txt:num(lastU, 2) + ' ' + u + ' × ' + T, why:'Vise ' + T + ' rép. à toutes les séries (dernière fois : ' + reps + ').'};
+  }
+  // sans charge : répétitions ou secondes
+  const first = ls.slice(0, nSets), minR = Math.min(...first.map(s => s.r)), unit = isTime ? ' s' : ' rép.';
+  if (first.length >= nSets && minR >= T){
+    if (hard) return {w:null, r:minR, kind:'same', txt:nSets + ' × ' + minR + unit, why:'Réussi, mais c’était dur : on garde ' + minR + unit + ' par série.'};
+    const r = minR + (isTime ? (easy ? 10 : 5) : (easy ? 2 : 1));
+    return {w:null, r, kind:'up', txt:nSets + ' × ' + r + unit, why:'Toutes les séries réussies : +' + (r - minR) + unit + ' par série.'};
+  }
+  return {w:null, r:T, kind:'same', txt:nSets + ' × ' + T + unit, why:'Vise ' + T + unit + ' à toutes les séries (dernière fois : ' + ls.map(s => s.r).join(', ') + ').'};
+}
+const RECO_ICON = {up:'▲', same:'=', down:'▼'};
+const sayW = w => num(w, 2).replace(',', ' virgule ') + (U() === 'lb' ? ' livres' : ' kilos');
+
+/* ================= PROCHAINE SÉANCE ================= */
+const CAT = {muscu:'force', pdc:'force', circuit:'cardio', sport:'cardio', mob:'mob'};
+const CAT_L = {force:'Force', cardio:'Cardio', mob:'Mobilité'};
+function weeklyGoals(){
+  // objectifs = ton rythme habituel des 4 dernières semaines (ou 2 force, 2 cardio, 1 mobilité au départ)
+  const mon = monday(new Date()), start = ymd(new Date(mon.getTime() - 28 * DAY)), end = ymd(mon);
+  const past = S.sessions.filter(s => s.date >= start && s.date < end);
+  if (past.length < 3) return {force:2, cardio:2, mob:1};
+  const first = past.reduce((m, s) => s.date < m ? s.date : m, end);
+  const weeks = Math.min(4, Math.max(1, Math.round((mon - pd(first)) / (7 * DAY))));
+  const g = {force:0, cardio:0, mob:0}; past.forEach(s => { const c = CAT[s.type]; if (c) g[c]++; });
+  return {force:Math.min(5, Math.max(1, Math.round(g.force / weeks))), cardio:Math.min(6, Math.round(g.cardio / weeks)), mob:Math.max(1, Math.round(g.mob / weeks))};
+}
+function favProg(types, fallback, rotate){
+  const since = ymd(new Date(Date.now() - 28 * DAY)), last = {}, count = {};
+  S.sessions.forEach(s => { if (s.pid && types.includes(s.type) && s.date >= since && getProg(s.pid)){ count[s.pid] = (count[s.pid] || 0) + 1; last[s.pid] = s.date; } });
+  const ids = Object.keys(count);
+  if (!ids.length) return getProg(fallback) || allProgs().find(p => types.includes(p.type));
+  // force : on alterne (programme fait il y a le plus longtemps) ; cardio / mobilité : ton préféré
+  ids.sort(rotate ? (a, b) => last[a] < last[b] ? -1 : last[a] > last[b] ? 1 : 0 : (a, b) => count[b] - count[a]);
+  return getProg(ids[0]);
+}
+function suggestNext(){
+  const now = new Date(), today = ymd(now), yest = ymd(new Date(now.getTime() - DAY)), before = ymd(new Date(now.getTime() - 2 * DAY));
+  const goals = weeklyGoals(), done = {force:0, cardio:0, mob:0};
+  sessionsThisWeek().forEach(s => { const c = CAT[s.type]; if (c) done[c]++; });
+  const tally = ['force', 'cardio', 'mob'].map(c => ({c, l:CAT_L[c], d:done[c], g:goals[c]}));
+  const daysLeft = 7 - (now.getDay() + 6) % 7, on = d => S.sessions.filter(s => s.date === d && s.type !== 'mob');
+  const mob = (why) => ({p:favProg(['mob'], 'b-mob'), why, tally});
+  if (on(today).length) return mob('Tu t’es déjà entraîné aujourd’hui. Une mobilité légère aide à récupérer, sinon repos.');
+  // sport habituel ce jour-ci de la semaine
+  const sp = {}; for (let w = 1; w <= 4; w++){ const d = ymd(new Date(now.getTime() - w * 7 * DAY)); S.sessions.filter(s => s.date === d && s.type === 'sport').forEach(s => { sp[s.sport] = (sp[s.sport] || 0) + 1; }); }
+  const habit = Object.keys(sp).find(k => sp[k] >= 2);
+  if (habit) return {sport:habit, why:'Tu joues souvent au ' + habit.toLowerCase() + ' le ' + now.toLocaleDateString('fr-CA', {weekday:'long'}) + '. Garde ton énergie, puis note ta partie ici.', tally};
+  if (on(yest).length && on(before).length) return mob('Deux jours d’entraînement de suite : place à la récupération.');
+  const forceYest = S.sessions.some(s => s.date === yest && CAT[s.type] === 'force');
+  const need = c => (goals[c] - done[c]) / daysLeft;
+  const forceOk = goals.force > done.force && !forceYest, cardioOk = goals.cardio > done.cardio;
+  let cat = null;
+  if (forceOk && (!cardioOk || need('force') >= need('cardio'))) cat = 'force'; else if (cardioOk) cat = 'cardio';
+  if (!cat){
+    if (goals.force > done.force && forceYest) return mob('Tes muscles ont travaillé hier : laisse-les récupérer 48 h. Mobilité aujourd’hui, force demain.');
+    return mob(goals.mob > done.mob ? 'Force et cardio faits cette semaine. Il te manque ta séance de mobilité.' : 'Objectifs de la semaine atteints. Mobilité ou repos bien mérité.');
+  }
+  const head = CAT_L[cat] + ' : ' + done[cat] + ' sur ' + goals[cat] + ' cette semaine.';
+  if (cat === 'cardio') return {p:favProg(['circuit'], 'b-matin'), why:head + (forceYest ? ' Force hier, alors on bouge sans charger les muscles.' : ' Ton circuit préféré.'), tally};
+  const ft = {muscu:0, pdc:0}, since = ymd(new Date(now.getTime() - 28 * DAY));
+  S.sessions.forEach(s => { if (s.date >= since && ft[s.type] != null) ft[s.type]++; });
+  const t = ft.pdc > ft.muscu ? 'pdc' : 'muscu', p = favProg([t], t === 'pdc' ? 'b-pdc' : 'b-fba', true);
+  const lastF = [...S.sessions].reverse().find(s => CAT[s.type] === 'force');
+  return {p, why:head + (lastF && lastF.name !== p.name ? ' Dernière : ' + lastF.name + ' (' + fmtDate(lastF.date) + '), on alterne.' : ''), tally};
+}
+function renderSuggest(){
+  const g = suggestNext(), box = $('nextSug'); box.innerHTML = '';
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'qbtn sugg';
+  if (g.sport){
+    b.innerHTML = `<span><span class="pill t-sport">Sport</span><strong>${esc(g.sport)}</strong><small>${esc(g.why)}</small></span><span class="arrow" style="color:var(--sport)">+</span>`;
+    b.addEventListener('click', openSport);
+  } else {
+    const p = g.p;
+    const ups = p.ex && !timed(p.type) ? p.ex.map(e => ({e, r:recommend(e, p.type)})).filter(x => x.r && x.r.kind !== 'same').slice(0, 3) : [];
+    b.innerHTML = `<span><span class="pill t-${p.type}">${TYPES[p.type].l}</span><strong>${esc(p.name)}</strong><small>${esc(g.why)} ≈ ${estMin(p)} min</small>
+      ${ups.length ? `<small class="ups">${ups.map(x => `<span class="${x.r.kind}">${RECO_ICON[x.r.kind]} ${esc(x.e.n)} ${esc(x.r.txt)}</span>`).join('')}</small>` : ''}</span><span class="arrow">▶</span>`;
+    b.addEventListener('click', () => startProgram(p));
+  }
+  box.appendChild(b);
+  const t = document.createElement('div'); t.className = 'tally';
+  t.innerHTML = g.tally.map(x => `<span class="${x.d >= x.g ? 'ok' : ''}">${x.l} ${x.d}/${x.g}</span>`).join('');
+  box.appendChild(t);
+}
+
 /* ================= ACCUEIL ================= */
 function renderHome(){
   const now = new Date();
@@ -830,6 +961,7 @@ function renderHome(){
     el.innerHTML = `<span>${names[i]}</span><div class="dot">${ss.length ? '✓' : d.getDate()}</div>`;
     el.title = ss.map(s => s.name).join(', '); strip.appendChild(el);
   }
+  renderSuggest();
   const q = $('quick'); q.innerHTML = '';
   const ids = [S.lastPid, 'b-matin', 'b-fba', 'b-pdc'].filter((v, i, a) => getProg(v) && a.indexOf(v) === i).slice(0, 3);
   ids.forEach((id, i) => {
@@ -1495,7 +1627,7 @@ function cShowLog(){
   box.innerHTML = `<h2 class="sec">Noter la séance</h2>
     ${counts ? '<p class="hint" style="margin-bottom:8px">Combien de répétitions au dernier tour ? Laisse vide pour sauter un exercice.</p>' + p.ex.map((e, i) => {
       const L = lastFor(e.n);
-      return `<div class="opt"><div>${esc(e.n)}<small>${L ? 'Dernière fois : ' + esc(setsText(L.it)) : 'Première fois'}</small></div><input type="number" id="cl${i}" inputmode="numeric" min="0" style="width:84px;text-align:center" aria-label="Répétitions pour ${esc(e.n)}"></div>`; }).join('') : ''}
+      return `<div class="opt"><div>${esc(e.n)}<small>${L ? 'Dernière fois : ' + esc(setsText(L.it)) : 'Première fois'}</small></div><input type="number" id="cl${i}" inputmode="numeric" min="0" style="width:84px;text-align:center"${L && L.it.sets[0] ? ` placeholder="obj. ${L.it.sets[0].r + 1}"` : ''} aria-label="Répétitions pour ${esc(e.n)}"></div>`; }).join('') : ''}
     <div class="opt"><div>Ressenti</div><div class="seg" role="radiogroup" aria-label="Ressenti">
       <label><input type="radio" name="feel" value="facile"><span>Facile</span></label><label><input type="radio" name="feel" value="correct" checked><span>Correct</span></label><label><input type="radio" name="feel" value="difficile"><span>Dur</span></label></div></div>
     <div class="row-btns"><button type="button" id="clSkip">Ne pas noter</button><button type="button" class="primary" id="clSave">Enregistrer</button></div>`;
@@ -1516,9 +1648,10 @@ function startSets(p){
   const withW = p.type === 'muscu';
   P = {kind:'sets', p, t0:Date.now(), clock:null, rest:null,
     ex: p.ex.map(e => {
-      const L = lastFor(e.n), lw = L ? Math.max(...L.it.sets.map(s => s.w || 0)) : 0;
-      return {n:e.n, unit:e.unit || 'rép', rest:e.rest || 60, target:e.sets + ' × ' + e.reps + (e.unit === 's' ? ' s' : ''), last:L,
-        sets:Array.from({length:e.sets}, () => ({w: lw ? +toU(lw).toFixed(1) : (e.w ? +toU(e.w).toFixed(1) : ''), r:e.reps, done:false}))};
+      const L = lastFor(e.n), lw = L ? Math.max(...L.it.sets.map(s => s.w || 0)) : 0, rec = recommend(e, p.type);
+      const w0 = rec && rec.w != null ? rec.w : lw ? +toU(lw).toFixed(1) : (e.w ? +toU(e.w).toFixed(1) : '');
+      return {n:e.n, unit:e.unit || 'rép', rest:e.rest || 60, target:e.sets + ' × ' + e.reps + (e.unit === 's' ? ' s' : ''), last:L, rec,
+        sets:Array.from({length:e.sets}, () => ({w:withW ? w0 : '', r:rec ? rec.r : e.reps, done:false}))};
     })};
   $('player').innerHTML = `<div class="pwrap">${playerTop(p, 'Temps', 'sClock')}
     <div id="sList" style="display:flex;flex-direction:column;gap:12px"></div>
@@ -1537,7 +1670,7 @@ function startSets(p){
   $('rPlus15').addEventListener('click', () => { if (P.rest){ P.rest.end += 15000; P.rest.total += 15000; P.rest.warned = false; } });
   $('rSkip').addEventListener('click', () => endRest(true));
   sRender(); wake();
-  const first = P.ex[0]; say('C\'est parti. Premier exercice : ' + first.n + '. ' + first.target.replace('×', 'séries de').replace(' s', ' secondes') + '.');
+  const first = P.ex[0]; say('C\'est parti. Premier exercice : ' + first.n + '. ' + first.target.replace('×', 'séries de').replace(' s', ' secondes') + '.' + recoSay(first));
 }
 function sRender(){
   const withW = P.p.type === 'muscu', list = $('sList'); list.innerHTML = '';
@@ -1547,6 +1680,7 @@ function sRender(){
     const ru = e.unit === 's' ? 'Sec.' : 'Rép.';
     c.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap"><h3>${esc(e.n)}</h3><span class="target">${esc(e.target)} · repos ${mmss(e.rest)}</span></div>
       ${e.last ? `<div class="prev">Dernière fois (${fmtDate(e.last.date, {day:'numeric', month:'short'})}) : ${esc(setsText(e.last.it))}</div>` : ''}
+      ${e.rec ? `<div class="reco ${e.rec.kind}"><b>${RECO_ICON[e.rec.kind]} Objectif : ${esc(e.rec.txt)}</b><span>${esc(e.rec.why)}</span></div>` : ''}
       <div class="srow head ${withW ? '' : 'nw'}"><span>#</span>${withW ? `<span>Charge (${U()})</span>` : ''}<span>${ru}</span><span></span></div>
       ${e.sets.map((s, si) => `<div class="srow ${withW ? '' : 'nw'} ${s.done ? 'done' : ''}"><span class="n">${si + 1}</span>
         ${withW ? `<input type="number" inputmode="decimal" step="0.5" min="0" value="${s.w}" data-e="${ei}" data-s="${si}" data-f="w" aria-label="Charge série ${si + 1}">` : ''}
@@ -1588,7 +1722,12 @@ function startRest(sec, nx){
 function endRest(announce, natural){
   if (!P || !P.rest){ if ($('restBar')) $('restBar').hidden = true; return; }
   clearInterval(P.rest.iv); const nx = P.rest.nx; P.rest = null; $('restBar').hidden = true;
-  if (announce && nx){ if (natural) beep(1047, .3, .3); say('C\'est reparti. ' + nx.txt + '.'); }
+  if (announce && nx){ if (natural) beep(1047, .3, .3); say('C\'est reparti. ' + nx.txt + '.' + (nx.i === 0 ? recoSay(nx.e) : '')); }
+}
+function recoSay(e){
+  const r = e.rec; if (!r || r.kind === 'same' && r.w == null) return '';
+  const what = r.w != null ? sayW(r.w) : r.r + (e.unit === 's' ? ' secondes' : ' répétitions');
+  return ' Objectif : ' + what + (r.kind === 'up' ? ', on monte.' : r.kind === 'down' ? ', on allège.' : '.');
 }
 function sShowDone(){
   const done = P.ex.map(e => ({n:e.n, unit:e.unit, sets:e.sets.filter(s => s.done && +s.r > 0).map(s => P.p.type === 'muscu' && +s.w > 0 ? {w:fromU(+s.w), r:+s.r} : {r:+s.r})})).filter(e => e.sets.length);
