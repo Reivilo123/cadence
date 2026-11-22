@@ -422,9 +422,11 @@ fieldset:disabled{opacity:.55}
       <div class="exhead"><h2 class="sec" style="margin:0">Poids</h2><button class="small primary" id="addMeasure" type="button">+ Nouvelle pesée</button></div>
       <div id="goalBar"></div>
       <div id="weightChart"></div>
+      <ul class="hist wlist" id="wList" aria-label="Historique des pesées"></ul>
+      <button type="button" class="small ghost" id="wMore" hidden></button>
     </section>
     <section class="card" id="measureForm" hidden>
-      <h2 class="sec">Nouvelle pesée</h2>
+      <h2 class="sec" id="mTitle">Nouvelle pesée</h2>
       <div class="fgrid">
         <label class="field">Date<input type="date" id="mDate"></label>
         <label class="field"><span id="mWLbl">Poids (lb)</span><input type="number" id="mW" inputmode="decimal" step="0.1" min="0"></label>
@@ -439,6 +441,7 @@ fieldset:disabled{opacity:.55}
         <label class="field">Cuisse<input type="number" id="mThigh" inputmode="decimal" step="0.1" min="0"></label>
       </div>
       <div class="row-btns"><button type="button" id="mCancel">Annuler</button><button type="button" class="primary" id="mSave">Enregistrer</button></div>
+      <button type="button" class="small ghost" id="mDel" hidden style="margin-top:8px;color:var(--work)">Supprimer cette pesée</button>
       <p class="hint" id="mStatus" aria-live="polite"></p>
     </section>
     <section class="card" id="bfCard"></section>
@@ -1157,6 +1160,12 @@ function renderBody(){
     } else gb.innerHTML = '';
     wc.innerHTML = lineChart(bs.slice(-16).map(b => ({d:b.date, v:toU(b.w)})), {unit:U(), goal: goal ? toU(goal) : null, cls:'blue', label:'Évolution du poids'});
   }
+  // historique des pesées, la plus récente en haut, chacune modifiable
+  const rev = bs.slice().reverse(), shown = wAll ? rev : rev.slice(0, 5), mk = ['neck','waist','hips','chest','arm','thigh'];
+  $('wList').innerHTML = shown.map(b => { const n = mk.filter(k => b[k]).length;
+    return `<li><div><b class="num">${fmtW(b.w)} ${U()}</b><small>${fmtDate(b.date, {weekday:'short', day:'numeric', month:'long', year:'numeric'})}${n ? ' · ' + n + ' mensuration' + (n > 1 ? 's' : '') : ''}${b.ex ? ' · exemple' : ''}</small></div>
+      <button type="button" class="small" data-edit="${esc(b.id)}" aria-label="Modifier la pesée du ${fmtDate(b.date, {day:'numeric', month:'long'})}">Modifier</button></li>`; }).join('');
+  $('wMore').hidden = rev.length <= 5; $('wMore').textContent = wAll ? 'Voir moins' : 'Voir les ' + rev.length + ' pesées';
   // mensurations
   renderBF(bs);
   const M = [['neck','Cou'],['waist','Taille'],['hips','Hanches'],['chest','Poitrine'],['arm','Bras'],['thigh','Cuisse']], t = $('mTable');
@@ -1207,16 +1216,33 @@ function renderBF(bs){
   html += '<p class="hint" style="font-size:.78rem">Estimation (méthode de la US Navy), précise à environ 3 à 4 % près. La masse maigre comprend les muscles, les os, les organes et l’eau. Mesure toujours au même moment pour bien suivre la tendance.</p>';
   box.innerHTML = html;
 }
-function openMeasure(){
-  $('measureForm').hidden = false; $('mDate').value = ymd(new Date());
-  ['mW','mNeck','mWaist','mHips','mChest','mArm','mThigh'].forEach(id => $(id).value = ''); $('mStatus').textContent = ''; $('mW').focus();
+const M_FIELDS = [['mNeck','neck'],['mWaist','waist'],['mHips','hips'],['mChest','chest'],['mArm','arm'],['mThigh','thigh']];
+let mEditId = null, wAll = false;
+// id fourni : on modifie cette pesée ; sinon nouvelle pesée
+function openMeasure(id){
+  const e = typeof id === 'string' ? S.body.find(b => b.id === id) : null;
+  mEditId = e ? e.id : null;
+  $('mTitle').textContent = e ? 'Modifier la pesée' : 'Nouvelle pesée'; $('mDel').hidden = !e; $('mStatus').textContent = '';
+  delete $('mDel').dataset.armed; $('mDel').textContent = 'Supprimer cette pesée'; // toujours deux appuis pour supprimer
+  $('mDate').value = e ? e.date : ymd(new Date());
+  $('mW').value = e ? String(Math.round(toU(e.w) * 10) / 10) : '';
+  M_FIELDS.forEach(([fid, k]) => { $(fid).value = e && e[k] ? String(e[k]) : ''; });
+  $('measureForm').hidden = false; $('measureForm').scrollIntoView({behavior:'smooth', block:'start'}); $('mW').focus({preventScroll:true});
 }
 function saveMeasure(){
   const v = id => { const x = parseFloat(String($(id).value).replace(',', '.')); return isNaN(x) || x <= 0 ? null : x; };
   const w = v('mW'); if (!w){ $('mStatus').textContent = 'Entre au moins ton poids.'; return; }
-  const e = {id:uid(), date:$('mDate').value || ymd(new Date()), w:fromU(w)};
-  [['mNeck','neck'],['mWaist','waist'],['mHips','hips'],['mChest','chest'],['mArm','arm'],['mThigh','thigh']].forEach(([id, k]) => { const x = v(id); if (x) e[k] = x; });
-  S.body.push(e); saveAll(); $('measureForm').hidden = true; renderBody(); renderHome();
+  const old = mEditId ? S.body.find(b => b.id === mEditId) : null;
+  const e = {id:old ? old.id : uid(), date:$('mDate').value || ymd(new Date()), w:fromU(w)};
+  if (old && old.ex) e.ex = true;
+  M_FIELDS.forEach(([id, k]) => { const x = v(id); if (x) e[k] = x; });
+  if (old) S.body = S.body.map(b => b.id === old.id ? e : b); else S.body.push(e);
+  mEditId = null; saveAll(); $('measureForm').hidden = true; renderBody(); renderHome();
+}
+function deleteMeasure(){
+  if (!mEditId) return;
+  S.body = S.body.filter(b => b.id !== mEditId); mEditId = null;
+  saveAll(); $('measureForm').hidden = true; renderBody(); renderHome();
 }
 function saveProfile(){
   const n = id => { const x = parseFloat(String($(id).value).replace(',', '.')); return isNaN(x) ? null : x; };
@@ -1919,8 +1945,11 @@ $('bkFile').addEventListener('change', e => { const f = e.target.files && e.targ
 $('newProg').addEventListener('click', () => openEditor(null, false));
 $('exSel').addEventListener('change', renderExercise);
 $('spSel').addEventListener('change', renderSportStats);
-$('addMeasure').addEventListener('click', openMeasure);
-$('mCancel').addEventListener('click', () => { $('measureForm').hidden = true; });
+$('addMeasure').addEventListener('click', () => openMeasure());
+$('mCancel').addEventListener('click', () => { mEditId = null; $('measureForm').hidden = true; });
+armButton($('mDel'), 'Sûr ? Supprimer', deleteMeasure);
+$('wList').addEventListener('click', ev => { const b = ev.target.closest('[data-edit]'); if (b) openMeasure(b.dataset.edit); });
+$('wMore').addEventListener('click', () => { wAll = !wAll; renderBody(); });
 $('mSave').addEventListener('click', saveMeasure);
 $('pfSave').addEventListener('click', saveProfile);
 $('fSave').addEventListener('click', saveFood);
