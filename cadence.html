@@ -381,6 +381,17 @@ fieldset:disabled{opacity:.55}
       <input type="file" id="bkFile" hidden>
       <p class="hint" id="bkStatus" aria-live="polite" style="margin-top:8px"></p>
     </section>
+    <section class="card">
+      <h2 class="sec">Garmin et Health Connect</h2>
+      <label class="opt" for="hcOn"><div>Importer mes entraînements<small>Les activités terminées sur ta montre Garmin (ou une autre app) arrivent dans Cadence à l’ouverture de l’app.</small></div>
+        <span class="sw"><input type="checkbox" id="hcOn"><span></span></span></label>
+      <p class="hint" id="hcHelp" style="margin-top:8px">Dans Garmin Connect : Paramètres → Applications connectées → Health Connect, puis active le partage des activités. Android 14 ou plus.</p>
+      <div class="row-btns" id="hcBtns" hidden>
+        <button type="button" id="hcNow">Importer maintenant</button>
+        <button type="button" id="hcPerm">Permissions</button>
+      </div>
+      <p class="hint" id="hcStatus" aria-live="polite" style="margin-top:8px"></p>
+    </section>
   </section>
 
   <!-- SÉANCES -->
@@ -1483,7 +1494,9 @@ const bodyKg = () => { const b = latestBody(); return b ? b.w : 70; };
 const sportKcal = (name, i, min) => Math.round(metOf(name, i) * bodyKg() * min / 60);
 const sportOn = () => !(S.profile && S.profile.sportCal === false);
 const sportBonus = d => sportOn() ? S.sessions.filter(s => s.type === 'sport' && s.date === d).reduce((a, s) => a + (s.kcal || 0), 0) : 0;
-const sportLine = s => s.dur + ' min · ' + INTS[s.int || 0] + ' · ≈ ' + (s.kcal || 0) + ' kcal' + (s.note ? ' · ' + s.note : '');
+const sportLine = s => s.src
+  ? [s.dur + ' min', (s.kcal || 0) + ' kcal', s.km ? num(s.km, 2) + ' km' : '', s.hr ? '♥ ' + s.hr + ' bpm' : '', s.src].filter(Boolean).join(' · ') + (s.note ? ' · ' + s.note : '')
+  : s.dur + ' min · ' + INTS[s.int || 0] + ' · ≈ ' + (s.kcal || 0) + ' kcal' + (s.note ? ' · ' + s.note : '');
 function openSport(){
   const last = S.sessions.slice().reverse().find(s => s.type === 'sport');
   const F = {sport: last ? last.sport : 'Volleyball', int: 1, dur: last ? last.dur : 60};
@@ -1940,6 +1953,108 @@ function bkApply(){
   location.hash = '#accueil'; location.reload();
 }
 $('bkSave').addEventListener('click', bkSave);
+
+/* ================= import Health Connect (Garmin Connect, etc.) =================
+   Chaque entraînement lu dans Health Connect devient une séance « sport » : il compte dans
+   l'historique, la semaine, les stats de sport et le bonus de calories du jour. */
+const HC_TYPES = {
+  RUNNING:'Course à pied', RUNNING_TREADMILL:'Course sur tapis', WALKING:'Marche', HIKING:'Randonnée',
+  BIKING:'Vélo', BIKING_STATIONARY:'Vélo stationnaire', SWIMMING_POOL:'Natation', SWIMMING_OPEN_WATER:'Natation en eau libre',
+  STRENGTH_TRAINING:'Musculation', WEIGHTLIFTING:'Musculation', CALISTHENICS:'Poids du corps', HIGH_INTENSITY_INTERVAL_TRAINING:'HIIT',
+  BOOT_CAMP:'Entraînement en circuit', EXERCISE_CLASS:'Cours de groupe', ELLIPTICAL:'Elliptique', ROWING_MACHINE:'Rameur', ROWING:'Aviron',
+  STAIR_CLIMBING:'Escaliers', STAIR_CLIMBING_MACHINE:'Escaliers', YOGA:'Yoga', PILATES:'Pilates', STRETCHING:'Étirements',
+  DANCING:'Danse', BOXING:'Boxe', MARTIAL_ARTS:'Arts martiaux', ROCK_CLIMBING:'Escalade', SKIING:'Ski', SNOWBOARDING:'Ski alpin / planche',
+  SNOWSHOEING:'Raquette', ICE_SKATING:'Patin', SKATING:'Patin', ICE_HOCKEY:'Hockey', ROLLER_HOCKEY:'Hockey', SOCCER:'Soccer',
+  BASKETBALL:'Basketball', VOLLEYBALL:'Volleyball', TENNIS:'Tennis', BADMINTON:'Badminton', SQUASH:'Squash', TABLE_TENNIS:'Tennis de table',
+  GOLF:'Golf', PADDLING:'Pagaie', SURFING:'Surf', BASEBALL:'Baseball', SOFTBALL:'Balle-molle', FOOTBALL_AMERICAN:'Football', RUGBY:'Rugby'
+};
+const HC_SRC = {'com.garmin.android.apps.connectmobile':'Garmin', 'com.strava':'Strava', 'com.sec.android.app.shealth':'Samsung Health',
+  'com.google.android.apps.fitness':'Google Fit', 'com.fitbit.FitbitMobile':'Fitbit', 'com.polar.flow':'Polar', 'com.suunto.android':'Suunto'};
+const HC_RANK = src => ({Garmin:0, Polar:1, Suunto:1, Fitbit:2, 'Samsung Health':3, Strava:4, 'Google Fit':5})[src] ?? 6;
+const HC_PERMS = ['READ_WORKOUTS', 'READ_TOTAL_CALORIES', 'READ_ACTIVE_CALORIES', 'READ_DISTANCE', 'READ_HEART_RATE'];
+const HC = Object.assign({on:false, last:null, seen:[]}, store.get('hc', {}));
+const hcSave = () => store.set('hc', HC);
+const HEALTH = () => plug('HealthPlugin');
+
+/* Convertit un entraînement Health Connect en séance Cadence */
+function hcToSession(w){
+  const st = new Date(w.startDate), en = new Date(w.endDate);
+  const src = HC_SRC[w.sourceBundleId] || 'Health Connect';
+  const name = HC_TYPES[w.workoutType] || (w.title && String(w.title).trim()) || 'Entraînement';
+  const hrs = Array.isArray(w.heartRate) ? w.heartRate.map(h => +h.bpm).filter(v => v > 0) : [];
+  return {id:'hc-' + (w.id || st.getTime()), hc:w.id || null, src, date:ymd(st), st:st.getTime(), en:en.getTime(),
+    type:'sport', name, sport:name, dur:Math.max(1, Math.round((+w.duration || (en - st) / 1000) / 60)), int:1,
+    kcal:Math.round(+w.calories || 0), km:w.distance ? Math.round(w.distance / 10) / 100 : 0,
+    hr:hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : 0,
+    note:w.title && HC_TYPES[w.workoutType] && String(w.title).trim() !== name ? String(w.title).trim() : '', items:[]};
+}
+/* Deux activités qui se chevauchent à plus de 50 % sont le même entraînement (ex. Garmin et Strava) */
+const hcOverlap = (a, b) => { const o = Math.min(a.en, b.en) - Math.max(a.st, b.st); return o > 0 && o >= 0.5 * Math.min(a.en - a.st, b.en - b.st); };
+function hcMerge(workouts){
+  const cand = workouts.filter(w => w && w.startDate && w.endDate).map(hcToSession)
+    .filter(s => s.en > s.st && s.dur >= 3)
+    .sort((a, b) => HC_RANK(a.src) - HC_RANK(b.src));
+  const imported = S.sessions.filter(s => s.st), added = [];
+  for (const s of cand){
+    if (HC.seen.includes(s.id)) continue;
+    if (imported.concat(added).some(x => x.id === s.id || hcOverlap(x, s))){ HC.seen.push(s.id); continue; }
+    added.push(s); HC.seen.push(s.id);
+    if (!sportList().some(([n]) => n.toLowerCase() === s.sport.toLowerCase())) S.sportsCustom.push(s.sport);
+  }
+  HC.seen = HC.seen.slice(-800);
+  if (added.length){ S.sessions.push(...added); sortSessions(); saveAll(); }
+  hcSave();
+  return added;
+}
+let hcBusy = false, hcLastRun = 0;
+async function hcSync(manual){
+  const H = HEALTH(), st = $('hcStatus');
+  if (!H || !HC.on || hcBusy) return;
+  if (!manual && Date.now() - hcLastRun < 120000) return;
+  hcBusy = true; hcLastRun = Date.now();
+  if (manual) st.textContent = 'Recherche de nouveaux entraînements…';
+  try {
+    const now = new Date(), from = HC.last ? new Date(new Date(HC.last).getTime() - 3 * DAY) : new Date(now.getTime() - 30 * DAY);
+    const r = await H.queryWorkouts({startDate:from.toISOString(), endDate:now.toISOString(), includeHeartRate:true, includeRoute:false, includeSteps:false});
+    const added = hcMerge((r && r.workouts) || []);
+    HC.last = now.toISOString(); hcSave();
+    st.textContent = added.length
+      ? (added.length === 1 ? '1 entraînement importé' : added.length + ' entraînements importés') + ' : ' + added.map(s => s.name).join(', ') + '.'
+      : 'À jour. Dernière vérification : ' + now.toLocaleTimeString('fr-CA', {hour:'2-digit', minute:'2-digit'}) + '.';
+    if (added.length && $('player').hidden && $('editor').hidden) route();
+  } catch(e){
+    const m = String(e && e.message || e);
+    st.textContent = /permission/i.test(m) ? 'Cadence n’a pas accès à tes entraînements. Touche « Permissions ».' : 'Import impossible : ' + m;
+  } finally { hcBusy = false; }
+}
+async function hcEnable(){
+  const H = HEALTH(), st = $('hcStatus');
+  if (!H){ $('hcOn').checked = false; st.textContent = 'Disponible seulement dans l’app Android.'; return; }
+  try {
+    const a = await H.isHealthAvailable();
+    if (!a || !a.available){
+      $('hcOn').checked = false;
+      st.innerHTML = 'Health Connect n’est pas installé sur ce téléphone. <button type="button" class="small" id="hcStore">L’installer</button>';
+      $('hcStore').addEventListener('click', () => H.showHealthConnectInPlayStore().catch(() => {}));
+      return;
+    }
+    const p = await H.requestHealthPermissions({permissions:HC_PERMS});
+    const ok = ((p && p.permissions) || []).some(o => o && o.READ_WORKOUTS);
+    if (!ok){ $('hcOn').checked = false; HC.on = false; hcSave(); hcUi(); st.textContent = 'Permission refusée : Cadence doit pouvoir lire tes entraînements.'; return; }
+    HC.on = true; hcSave(); hcUi(); hcSync(true);
+  } catch(e){ $('hcOn').checked = false; st.textContent = 'Health Connect indisponible : ' + (e && e.message ? e.message : e); }
+}
+function hcUi(){
+  $('hcOn').checked = HC.on; $('hcBtns').hidden = !HC.on;
+  if (!HEALTH()) $('hcStatus').textContent = 'Disponible seulement dans l’app Android.';
+  else if (HC.on && HC.last && !$('hcStatus').textContent) $('hcStatus').textContent = 'Dernière vérification : ' + new Date(HC.last).toLocaleString('fr-CA', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) + '.';
+}
+$('hcOn').addEventListener('change', e => { if (e.target.checked) hcEnable(); else { HC.on = false; hcSave(); hcUi(); $('hcStatus').textContent = 'Import désactivé. Les entraînements déjà importés restent.'; } });
+$('hcNow').addEventListener('click', () => hcSync(true));
+$('hcPerm').addEventListener('click', () => { const H = HEALTH(); if (H) H.openHealthConnectSettings().catch(() => {}); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !P) hcSync(false); });
+hcUi();
+setTimeout(() => hcSync(false), 1500);
 $('bkLoad').addEventListener('click', () => { $('bkFile').value = ''; $('bkFile').click(); });
 $('bkFile').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) bkRead(f); });
 $('newProg').addEventListener('click', () => openEditor(null, false));
