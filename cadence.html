@@ -2027,6 +2027,12 @@ async function hcSync(manual){
     st.textContent = /permission/i.test(m) ? 'Cadence n’a pas accès à tes entraînements. Touche « Permissions ».' : 'Import impossible : ' + m;
   } finally { hcBusy = false; }
 }
+/* Android renvoie {permissions:{READ_WORKOUTS:true,…}}, iOS une liste [{READ_WORKOUTS:true},…] */
+function hcGranted(p, name){
+  const perms = p && p.permissions;
+  if (Array.isArray(perms)) return perms.some(o => o && o[name] === true);
+  return !!(perms && typeof perms === 'object' && perms[name] === true);
+}
 async function hcEnable(){
   const H = HEALTH(), st = $('hcStatus');
   if (!H){ $('hcOn').checked = false; st.textContent = 'Disponible seulement dans l’app Android.'; return; }
@@ -2039,7 +2045,7 @@ async function hcEnable(){
       return;
     }
     const p = await H.requestHealthPermissions({permissions:HC_PERMS});
-    const ok = ((p && p.permissions) || []).some(o => o && o.READ_WORKOUTS);
+    const ok = hcGranted(p, 'READ_WORKOUTS');
     if (!ok){ $('hcOn').checked = false; HC.on = false; hcSave(); hcUi(); st.textContent = 'Permission refusée : Cadence doit pouvoir lire tes entraînements.'; return; }
     HC.on = true; hcSave(); hcUi(); hcSync(true);
   } catch(e){ $('hcOn').checked = false; st.textContent = 'Health Connect indisponible : ' + (e && e.message ? e.message : e); }
