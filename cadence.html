@@ -1017,8 +1017,8 @@ function renderHome(){
   sb.addEventListener('click', openSport); q.appendChild(sb);
   const L = S.sessions[S.sessions.length - 1], box = $('lastSess');
   if (!L){ box.innerHTML = '<p class="hint">Aucune séance enregistrée. Lance un programme et note tes résultats à la fin.</p>'; return; }
-  if (L.type === 'sport'){
-    box.innerHTML = `<div class="hist"><div class="t"><span class="pill t-sport">Sport</span><strong>${esc(L.name)}</strong></div>
+  if (L.type === 'sport' || L.src){
+    box.innerHTML = `<div class="hist"><div class="t"><span class="pill t-${L.type}">${TYPES[L.type].l}</span><strong>${esc(L.name)}</strong></div>
       <small class="hint">${fmtDate(L.date, {weekday:'long', day:'numeric', month:'long'})} · ${esc(sportLine(L))}</small></div>`;
     return;
   }
@@ -1090,7 +1090,7 @@ function renderProgress(){
   S.sessions.slice().reverse().slice(0, 40).forEach(s => {
     const li = document.createElement('li');
     li.innerHTML = `<div><div class="t"><span class="pill t-${s.type}">${TYPES[s.type].l}</span><strong>${esc(s.name)}</strong></div>
-      <small>${fmtDate(s.date)} · ${s.type === 'sport' ? esc(sportLine(s)) : s.dur + ' min' + (s.feel ? ' · ' + FEELS[s.feel] : '')}${s.ex ? ' · exemple' : ''}</small></div>`;
+      <small>${fmtDate(s.date)} · ${s.type === 'sport' || s.src ? esc(sportLine(s)) : s.dur + ' min' + (s.feel ? ' · ' + FEELS[s.feel] : '')}${s.ex ? ' · exemple' : ''}</small></div>`;
     const del = document.createElement('button'); del.type = 'button'; del.className = 'small'; del.textContent = 'Supprimer';
     armButton(del, 'Confirmer ?', () => { S.sessions = S.sessions.filter(x => x.id !== s.id); saveAll(); renderProgress(); });
     li.appendChild(del); ol.appendChild(li);
@@ -1968,6 +1968,11 @@ const HC_TYPES = {
   BASKETBALL:'Basketball', VOLLEYBALL:'Volleyball', TENNIS:'Tennis', BADMINTON:'Badminton', SQUASH:'Squash', TABLE_TENNIS:'Tennis de table',
   GOLF:'Golf', PADDLING:'Pagaie', SURFING:'Surf', BASEBALL:'Baseball', SOFTBALL:'Balle-molle', FOOTBALL_AMERICAN:'Football', RUGBY:'Rugby'
 };
+/* Catégorie Cadence de chaque type d'entraînement (le reste — course, vélo, natation… — reste « sport », compté en cardio) */
+const HC_CAT = {STRENGTH_TRAINING:'muscu', WEIGHTLIFTING:'muscu', CALISTHENICS:'pdc',
+  HIGH_INTENSITY_INTERVAL_TRAINING:'circuit', BOOT_CAMP:'circuit', EXERCISE_CLASS:'circuit',
+  YOGA:'mob', PILATES:'mob', STRETCHING:'mob'};
+const HC_CAT_BY_NAME = {}; Object.keys(HC_CAT).forEach(t => { HC_CAT_BY_NAME[HC_TYPES[t]] = HC_CAT[t]; });
 const HC_SRC = {'com.garmin.android.apps.connectmobile':'Garmin', 'com.strava':'Strava', 'com.sec.android.app.shealth':'Samsung Health',
   'com.google.android.apps.fitness':'Google Fit', 'com.fitbit.FitbitMobile':'Fitbit', 'com.polar.flow':'Polar', 'com.suunto.android':'Suunto'};
 const HC_RANK = src => ({Garmin:0, Polar:1, Suunto:1, Fitbit:2, 'Samsung Health':3, Strava:4, 'Google Fit':5})[src] ?? 6;
@@ -1982,8 +1987,9 @@ function hcToSession(w){
   const src = HC_SRC[w.sourceBundleId] || 'Health Connect';
   const name = HC_TYPES[w.workoutType] || (w.title && String(w.title).trim()) || 'Entraînement';
   const hrs = Array.isArray(w.heartRate) ? w.heartRate.map(h => +h.bpm).filter(v => v > 0) : [];
-  return {id:'hc-' + (w.id || st.getTime()), hc:w.id || null, src, date:ymd(st), st:st.getTime(), en:en.getTime(),
-    type:'sport', name, sport:name, dur:Math.max(1, Math.round((+w.duration || (en - st) / 1000) / 60)), int:1,
+  const type = HC_CAT[w.workoutType] || 'sport';
+  return {id:'hc-' + (w.id || st.getTime()), hc:w.id || null, src, wt:w.workoutType || '', date:ymd(st), st:st.getTime(), en:en.getTime(),
+    type, name, sport:type === 'sport' ? name : undefined, dur:Math.max(1, Math.round((+w.duration || (en - st) / 1000) / 60)), int:1,
     kcal:Math.round(+w.calories || 0), km:w.distance ? Math.round(w.distance / 10) / 100 : 0,
     hr:hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : 0,
     note:w.title && HC_TYPES[w.workoutType] && String(w.title).trim() !== name ? String(w.title).trim() : '', items:[]};
@@ -1999,12 +2005,27 @@ function hcMerge(workouts){
     if (HC.seen.includes(s.id)) continue;
     if (imported.concat(added).some(x => x.id === s.id || hcOverlap(x, s))){ HC.seen.push(s.id); continue; }
     added.push(s); HC.seen.push(s.id);
-    if (!sportList().some(([n]) => n.toLowerCase() === s.sport.toLowerCase())) S.sportsCustom.push(s.sport);
+    if (s.type === 'sport' && !sportList().some(([n]) => n.toLowerCase() === s.sport.toLowerCase())) S.sportsCustom.push(s.sport);
   }
   HC.seen = HC.seen.slice(-800);
   if (added.length){ S.sessions.push(...added); sortSessions(); saveAll(); }
   hcSave();
   return added;
+}
+/* Reclasse les entraînements importés avant la v1.4.2, quand tout arrivait en « sport » */
+function hcMigrate(){
+  let n = 0;
+  S.sessions.forEach(s => {
+    if (!s.src || s.type !== 'sport') return;
+    const cat = HC_CAT[s.wt] || HC_CAT_BY_NAME[s.name];
+    if (cat){ s.type = cat; delete s.sport; n++; }
+  });
+  if (!n) return 0;
+  // retire de la liste des sports les noms qui ne servent plus à aucune séance de sport
+  const used = new Set(S.sessions.filter(s => s.type === 'sport').map(s => s.sport));
+  S.sportsCustom = S.sportsCustom.filter(x => !HC_CAT_BY_NAME[x] || used.has(x));
+  saveAll();
+  return n;
 }
 let hcBusy = false, hcLastRun = 0;
 async function hcSync(manual){
@@ -2059,6 +2080,7 @@ $('hcOn').addEventListener('change', e => { if (e.target.checked) hcEnable(); el
 $('hcNow').addEventListener('click', () => hcSync(true));
 $('hcPerm').addEventListener('click', () => { const H = HEALTH(); if (H) H.openHealthConnectSettings().catch(() => {}); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !P) hcSync(false); });
+if (hcMigrate() && $('player').hidden && $('editor').hidden) route();
 hcUi();
 setTimeout(() => hcSync(false), 1500);
 $('bkLoad').addEventListener('click', () => { $('bkFile').value = ''; $('bkFile').click(); });
